@@ -1,0 +1,169 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* Shadcn standard vars mapped to soft theme */
+  --color-border: var(--outline-variant);
+  --color-input: var(--surface-variant);
+  --color-ring: var(--primary);
+  --color-background: var(--surface);
+  --color-foreground: var(--on-surface);
+
+  /* Material Design 3 / Soft Theme Custom Colors */
+  --color-primary: #3525cd;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #dad7ff;
+  --color-on-primary-container: #0b0066;
+
+  --color-secondary: #5a5d72;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #dfe1f9;
+  --color-on-secondary-container: #171a2c;
+
+  --color-tertiary: #7e3000;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #a44100;
+  --color-on-tertiary-container: #341000;
+
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #410002;
+
+  --color-surface: #fdf7ff;
+  --color-on-surface: #1a1b21;
+  --color-surface-dim: #dcd8e5;
+  --color-surface-variant: #e4e1ee;
+  --color-on-surface-variant: #464555;
+  
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f5f2ff;
+  --color-surface-container: #efecfa;
+  --color-surface-container-high: #e9e6f4;
+  --color-surface-container-highest: #e3e1ee;
+
+  --color-outline: #777587;
+  --color-outline-variant: #c7c4d8;
+  
+  --radius-lg: 1rem;
+  --radius-md: 0.75rem;
+  --radius-sm: 0.5rem;
+}
+
+@layer base {
+  :root {
+    /* Required for Shadcn UI */
+    --background: #fdf7ff;
+    --foreground: #1a1b21;
+
+    --card: #ffffff;
+    --card-foreground: #1a1b21;
+
+    --popover: #ffffff;
+    --popover-foreground: #1a1b21;
+
+    --primary: #3525cd;
+    --primary-foreground: #ffffff;
+
+    --secondary: #5a5d72;
+    --secondary-foreground: #ffffff;
+
+    --muted: #f5f2ff;
+    --muted-foreground: #464555;
+
+    --accent: #e9e6f4;
+    --accent-foreground: #1a1b21;
+
+    --destructive: #ba1a1a;
+    --destructive-foreground: #ffffff;
+
+    --border: #c7c4d8;
+    --input: #e4e1ee;
+    --ring: #3525cd;
+
+    --radius: 0.75rem;
+    
+    /* Custom Tokens */
+    --surface: #fdf7ff;
+    --on-surface: #1a1b21;
+    --outline-variant: #c7c4d8;
+    --surface-variant: #e4e1ee;
+  }
+
+  .dark {
+    --background: #121318;
+    --foreground: #e3e1ee;
+
+    --card: #1a1b21;
+    --card-foreground: #e3e1ee;
+
+    --popover: #1a1b21;
+    --popover-foreground: #e3e1ee;
+
+    --primary: #c3c0ff;
+    --primary-foreground: #0b0066;
+
+    --secondary: #c3c5dd;
+    --secondary-foreground: #2c2f42;
+
+    --muted: #282a35;
+    --muted-foreground: #c7c4d8;
+
+    --accent: #282a35;
+    --accent-foreground: #e3e1ee;
+
+    --destructive: #ffb4ab;
+    --destructive-foreground: #690005;
+
+    --border: #464555;
+    --input: #282a35;
+    --ring: #c3c0ff;
+    
+    /* Custom Tokens Dark */
+    --surface: #121318;
+    --on-surface: #e3e1ee;
+    --outline-variant: #464555;
+    --surface-variant: #464555;
+  }
+}
+
+@layer utilities {
+  /* Soft theme utilities */
+  .glass {
+    background: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .dark .glass {
+    background: rgba(18, 19, 24, 0.45);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+@keyframes gradient {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@layer utilities {
+  .animate-fade-in  { animation: fade-in  0.2s ease both; }
+  .animate-slide-up { animation: slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1) both; }
+}

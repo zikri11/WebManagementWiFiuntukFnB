@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: wifi_mgmt_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: wifi_mgmt_db
+    ports:
+      # Port 5432 sudah dipakai oleh PostgreSQL native Windows
+      # Gunakan port 5433 untuk container ini
+      - '5433:5432'
+    volumes:
+      # PostgreSQL 18+ recommends mounting at /var/lib/postgresql (not /data)
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8
+    container_name: wifi_mgmt_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

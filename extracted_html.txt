@@ -1,0 +1,80 @@
+<USER_REQUEST>
+saya ingin merubah gaya tampilan nya menjadi soft seperti ini 
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Dashboard Overview - FnB WiFi Manager</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary": "#ffffff",
+                        "surface-dim": "#dcd8e5",
+                        "tertiary-container": "#a44100",
+                        "error-container": "#ffdad6",
+                        "primary": "#3525cd",
+                        "on-primary-container": "#dad7ff",
+                        "surface-container-low": "#f5f2ff",
+                        "inverse-surface": "#302f39",
+                        "on-secondary-fixed-variant": "#38485d",
+                        "tertiary-fixed": "#ffdbcc",
+                        "tertiary": "#7e3000",
+                        "surface-variant": "#e4e1ee",
+                        "outline": "#777587",
+                        "error": "#ba1a1a",
+                        "primary-fixed-dim": "#c3c0ff",
+                        "outline-variant": "#c7c4d8",
+                        "primary-fixed": "#e2dfff",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#464555",
+                        "on-tertiary": "#ffffff",
+                        "on-tertiar
+<truncated 14404 bytes>
+-variant space-y-stack-lg">
+<div class="relative">
+<div class="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-primary border-2 border-surface-container-lowest"></div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Voucher batch 100 dibuat</p>
+<p class="text-label-md font-label-md text-on-surface-variant mt-1">10 mins ago • Admin</p>
+</div>
+<div class="relative">
+<div class="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-primary border-2 border-surface-container-lowest"></div>
+<p class="text-body-md font-body-md text-on-surface font-medium">AI Analysis dijalankan</p>
+<p class="text-label-md font-label-md text-on-surface-variant mt-1">1 hour ago • System</p>
+</div>
+<div class="relative">
+<div class="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-surface-container-lowest"></div>
+<p class="text-body-md font-body-md text-on-surface font-medium">Outlet B went offline</p>
+<p class="text-label-md font-label-md text-on-surface-variant mt-1">2 hours ago • Monitoring</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-05-27T16:41:48+07:00.
+
+The user's current state is as follows:
+Active Document: d:\MAGANG-KP\PROJEK\DEMO\DEMO\fase.md (LANGUAGE_MARKDOWN)
+Cursor is on line: 12
+Other open documents:
+- d:\MAGANG-KP\PROJEK\DEMO\DEMO\README.md (LANGUAGE_MARKDOWN)
+- d:\MAGANG-KP\PROJEK\DEMO\DEMO\backend\tsconfig.json (LANGUAGE_UNSPECIFIED)
+- d:\MAGANG-KP\PROJEK\DEMO\DEMO\backend\README.md (LANGUAGE_MARKDOWN)
+- d:\MAGANG-KP\PROJEK\DEMO\DEMO\backend\prisma.config.ts (LANGUAGE_TYPESCRIPT)
+- d:\MAGANG-KP\PROJEK\DEMO\DEMO\PROJECT.md (LANGUAGE_MARKDOWN)
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from Gemini 3.5 Flash (High) to Gemini 3.1 Pro (High). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

@@ -1,0 +1,244 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Admin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String   // bcrypt hash
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs     ActivityLog[]
+  aiReports AiReport[]
+
+  @@map("admins")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIKROTIK SERVER
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MikrotikServer {
+  id             String            @id @default(cuid())
+  name           String
+  host           String
+  port           Int               @default(8728)
+  username       String
+  password       String            // enkripsi saat implementasi
+  useSSL         Boolean           @default(false)
+  hotspotName    String?           // nama hotspot server di MikroTik (misal: hotspot1)
+  dnsName        String?           // DNS name login page captive portal (misal: hotspot.wifi.com)
+  lastStatus     ServerStatus      @default(UNKNOWN)
+  lastCheckedAt  DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  profiles  HotspotProfile[]
+  vouchers  Voucher[]
+  logs      ActivityLog[]
+  aiReports AiReport[]
+
+  @@map("mikrotik_servers")
+}
+
+enum ServerStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOTSPOT PROFILE
+// ─────────────────────────────────────────────────────────────────────────────
+
+model HotspotProfile {
+  id             String         @id @default(cuid())
+  serverId       String
+  name           String
+  rateLimit      String         // contoh: "2M/2M"
+  sessionTimeout String?        // contoh: "1h", "8h"
+  idleTimeout    String?        // contoh: "30m"
+  sharedUsers    Int            @default(1)
+  validity       String?        // contoh: "1d" (durasi tampil di voucher)
+  description    String?
+  syncedToRouter Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  server   MikrotikServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  vouchers Voucher[]
+
+  @@unique([serverId, name])
+  @@map("hotspot_profiles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOUCHER
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Voucher {
+  id          String        @id @default(cuid())
+  serverId    String
+  profileId   String
+  username    String        @unique
+  password    String
+  status      VoucherStatus @default(UNUSED)
+  batchId     String?       // ID batch jika dibuat secara batch
+  posTransId  String?       // ID transaksi POS jika dibuat via POS
+  outletName  String?
+  usedAt      DateTime?
+  expiredAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  server  MikrotikServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  profile HotspotProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  posTrans PosTransaction? @relation(fields: [posTransId], references: [id])
+
+  @@index([serverId])
+  @@index([profileId])
+  @@index([status])
+  @@index([batchId])
+  @@map("vouchers")
+}
+
+enum VoucherStatus {
+  UNUSED
+  USED
+  REVOKED
+  EXPIRED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POS TRANSACTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PosTransaction {
+  id             String   @id @default(cuid())
+  transactionId  String   @unique  // ID dari sistem POS
+  outletId       String
+  totalAmount    Float
+  customerName   String?
+  voucherProfile String   // nama profile yang diminta
+  status         PosTransactionStatus @default(PENDING)
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vouchers Voucher[]
+
+  @@index([outletId])
+  @@index([status])
+  @@map("pos_transactions")
+}
+
+enum PosTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI REPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AiReport {
+  id          String   @id @default(cuid())
+  serverId    String
+  adminId     String?
+  provider    String   // openai | anthropic | gemini
+  configJson  String   // konfigurasi MikroTik yang dianalisis (JSON string)
+  resultMd    String   // hasil analisis dalam format Markdown
+  status      AiReportStatus @default(PENDING)
+  errorMessage String?
+  createdAt   DateTime @default(now())
+
+  server MikrotikServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  admin  Admin?         @relation(fields: [adminId], references: [id])
+
+  @@index([serverId])
+  @@map("ai_reports")
+}
+
+enum AiReportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVITY LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ActivityLog {
+  id        String      @id @default(cuid())
+  adminId   String?
+  serverId  String?
+  action    LogAction
+  entity    String?     // nama entitas yang terpengaruh (Voucher, Server, dll)
+  entityId  String?     // ID entitas
+  detail    String?     // detail tambahan (JSON string atau teks)
+  ipAddress String?
+  createdAt DateTime    @default(now())
+
+  admin  Admin?         @relation(fields: [adminId], references: [id])
+  server MikrotikServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
+
+  @@index([adminId])
+  @@index([serverId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+enum LogAction {
+  // Auth
+  ADMIN_LOGIN
+  ADMIN_LOGOUT
+
+  // Server
+  SERVER_CREATED
+  SERVER_UPDATED
+  SERVER_DELETED
+  SERVER_TESTED
+
+  // Profile
+  PROFILE_CREATED
+  PROFILE_UPDATED
+  PROFILE_DELETED
+  PROFILE_SYNCED
+
+  // Voucher
+  VOUCHER_CREATED
+  VOUCHER_BATCH_CREATED
+  VOUCHER_PRINTED
+  VOUCHER_REVOKED
+  VOUCHER_USED
+
+  // POS
+  POS_TRANSACTION_RECEIVED
+  POS_VOUCHER_GENERATED
+
+  // AI
+  AI_ANALYSIS_STARTED
+  AI_ANALYSIS_COMPLETED
+  AI_ANALYSIS_FAILED
+
+  // Error
+  ROUTER_CONNECTION_FAILED
+  SYSTEM_ERROR
+}
