@@ -2,6 +2,7 @@
 
 import { useAuthStore } from "@/store/auth-store";
 import { useServerStore } from "@/store/server-store";
+import { ToastContainer } from "@/components/Toast";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -10,7 +11,6 @@ import {
   Server,
   Users,
   Ticket,
-  ShoppingCart,
   Activity,
   BrainCircuit,
   LogOut,
@@ -83,7 +83,6 @@ export default function DashboardLayout({
     { name: "Servers", href: "/servers", icon: Server },
     { name: "Profiles", href: "/profiles", icon: Users },
     { name: "Vouchers", href: "/vouchers", icon: Ticket },
-    { name: "POS Transactions", href: "/pos", icon: ShoppingCart },
     { name: "AI Analysis", href: "/ai", icon: BrainCircuit },
     { name: "Activity Logs", href: "/logs", icon: History },
   ];
@@ -218,6 +217,9 @@ export default function DashboardLayout({
           )}
         </main>
       </div>
+
+      {/* Notifikasi global (toast) */}
+      <ToastContainer />
     </div>
   );
 }

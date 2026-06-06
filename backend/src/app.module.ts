@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { PrismaModule } from './modules/prisma/prisma.module.js';
 import { MikrotikModule } from './modules/mikrotik/mikrotik.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ServersModule } from './modules/servers/servers.module.js';
 import { ProfilesModule } from './modules/profiles/profiles.module.js';
 import { VouchersModule } from './modules/vouchers/vouchers.module.js';
-import { PosModule } from './modules/pos/pos.module.js';
 import { MonitoringModule } from './modules/monitoring/monitoring.module.js';
 import { AiModule } from './modules/ai/ai.module.js';
 import { ActivityLogModule } from './modules/activity-log/activity-log.module.js';
@@ -25,6 +26,12 @@ import aiConfig from './config/ai.config.js';
       envFilePath: '.env',
     }),
 
+    // ─── Rate Limiting (global) ────────────────────────────────────────────
+    // Default: 100 req / menit / IP. Endpoint sensitif override via @Throttle.
+    ThrottlerModule.forRoot([
+      { name: 'default', ttl: 60_000, limit: 100 },
+    ]),
+
     // ─── Database (global, PrismaService tersedia di semua module) ─────────
     PrismaModule,
 
@@ -36,10 +43,13 @@ import aiConfig from './config/ai.config.js';
     ServersModule,
     ProfilesModule,
     VouchersModule,
-    PosModule,
     MonitoringModule,
     AiModule,
     ActivityLogModule,
+  ],
+  providers: [
+    // Rate limiting global — terapkan ThrottlerGuard ke semua route
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

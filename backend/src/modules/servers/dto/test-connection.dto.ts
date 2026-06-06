@@ -19,8 +19,8 @@ export class TestConnectionDto {
   host!: string;
 
   @ApiProperty({
-    description: 'Port REST API (default: 80 untuk HTTP, 443 untuk HTTPS)',
-    example: 80,
+    description: 'Port RouterOS API (default: 8728 untuk api, 8729 untuk api-ssl)',
+    example: 8728,
     required: false,
   })
   @IsInt({ message: 'Port harus berupa angka' })

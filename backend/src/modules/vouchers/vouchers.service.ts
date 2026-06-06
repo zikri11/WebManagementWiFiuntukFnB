@@ -497,27 +497,47 @@ export class VouchersService {
       }
     }
 
-    // 5. Hapus di MikroTik dan Database
-    let deletedCount = 0;
-    const usernamesDeleted: string[] = [];
+    // 5. Hapus di MikroTik (1 koneksi per server) lalu korelasikan hasilnya ke DB.
+    //    Partial-safe: DB hanya menghapus voucher yang BENAR-BENAR terhapus di router
+    //    (removed) atau yang memang sudah tidak ada di router (notFound). Voucher yang
+    //    GAGAL dihapus di router tetap di DB agar bisa di-retry — tidak hilang sepihak.
     const mainServerId = vouchers[0]?.serverId;
 
-    const promises = vouchers.map(async (voucher) => {
-      try {
-        await this.mikrotikService.removeHotspotUser(voucher.serverId, voucher.username);
-      } catch (error) {
-        // Abaikan error individual jika user tidak ditemukan di router
-      }
-      usernamesDeleted.push(voucher.username);
-      deletedCount++;
-    });
+    // Kelompokkan username per server
+    const usernamesByServer = new Map<string, string[]>();
+    for (const voucher of vouchers) {
+      const list = usernamesByServer.get(voucher.serverId) ?? [];
+      list.push(voucher.username);
+      usernamesByServer.set(voucher.serverId, list);
+    }
 
-    await Promise.allSettled(promises);
+    // username yang aman dihapus dari DB (sukses di router atau sudah tidak ada)
+    const safeToDeleteUsernames = new Set<string>();
+    const failedUsernames: string[] = [];
 
-    // Hapus dari database
-    await this.prisma.voucher.deleteMany({
-      where: { id: { in: ids } },
-    });
+    for (const [serverId, names] of usernamesByServer.entries()) {
+      const result = await this.mikrotikService.removeHotspotUsersByNames(serverId, names);
+      for (const name of result.removed) safeToDeleteUsernames.add(name);
+      for (const name of result.notFound) safeToDeleteUsernames.add(name);
+      for (const name of result.failed) failedUsernames.push(name);
+    }
+
+    // Hapus dari DB hanya voucher yang aman
+    const idsToDelete = vouchers
+      .filter((v) => safeToDeleteUsernames.has(v.username))
+      .map((v) => v.id);
+
+    if (idsToDelete.length > 0) {
+      await this.prisma.voucher.deleteMany({
+        where: { id: { in: idsToDelete } },
+      });
+    }
+
+    const deletedCount = idsToDelete.length;
+    const failedCount = failedUsernames.length;
+    const deletedUsernames = vouchers
+      .filter((v) => safeToDeleteUsernames.has(v.username))
+      .map((v) => v.username);
 
     // 6. Catat Log
     if (deletedCount > 0) {
@@ -525,14 +545,21 @@ export class VouchersService {
         action: 'VOUCHER_REVOKED',
         serverId: mainServerId,
         entity: 'Voucher',
-        detail: `Menghapus ${deletedCount} voucher secara massal (${usernamesDeleted.slice(0, 5).join(', ')}${usernamesDeleted.length > 5 ? '...' : ''})`,
+        detail: `Menghapus ${deletedCount} voucher secara massal${failedCount > 0 ? `, ${failedCount} gagal` : ''} (${deletedUsernames.slice(0, 5).join(', ')}${deletedUsernames.length > 5 ? '...' : ''})`,
       });
     }
 
+    const message =
+      failedCount > 0
+        ? `Berhasil menghapus ${deletedCount} voucher, ${failedCount} gagal dihapus di router dan tetap tersimpan. Silakan coba lagi.`
+        : `Berhasil menghapus ${deletedCount} voucher`;
+
     return {
-      success: true,
-      message: `Berhasil menghapus ${deletedCount} voucher`,
-      deletedCount
+      success: failedCount === 0,
+      message,
+      deletedCount,
+      failedCount,
+      failedUsernames,
     };
   }
 }

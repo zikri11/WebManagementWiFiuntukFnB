@@ -98,7 +98,6 @@ model Voucher {
   password    String
   status      VoucherStatus @default(UNUSED)
   batchId     String?       // ID batch jika dibuat secara batch
-  posTransId  String?       // ID transaksi POS jika dibuat via POS
   outletName  String?
   usedAt      DateTime?
   expiredAt   DateTime?
@@ -107,7 +106,6 @@ model Voucher {
 
   server  MikrotikServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
   profile HotspotProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  posTrans PosTransaction? @relation(fields: [posTransId], references: [id])
 
   @@index([serverId])
   @@index([profileId])
@@ -121,35 +119,6 @@ enum VoucherStatus {
   USED
   REVOKED
   EXPIRED
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POS TRANSACTION
-// ─────────────────────────────────────────────────────────────────────────────
-
-model PosTransaction {
-  id             String   @id @default(cuid())
-  transactionId  String   @unique  // ID dari sistem POS
-  outletId       String
-  totalAmount    Float
-  customerName   String?
-  voucherProfile String   // nama profile yang diminta
-  status         PosTransactionStatus @default(PENDING)
-  errorMessage   String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  vouchers Voucher[]
-
-  @@index([outletId])
-  @@index([status])
-  @@map("pos_transactions")
-}
-
-enum PosTransactionStatus {
-  PENDING
-  SUCCESS
-  FAILED
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

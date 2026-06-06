@@ -206,13 +206,17 @@ export class ProfilesService {
       );
     }
 
-    // 1. Ambil data dari MikroTik secara real-time
+    // 1. Ambil data dari MikroTik secara real-time (DI LUAR transaksi DB).
+    //    usersFetchOk menandai apakah daftar user berhasil ditarik — penting agar
+    //    blok penyelarasan voucher TIDAK menghapus data lokal saat fetch user gagal.
     const routerProfiles = await this.mikrotikService.getHotspotProfiles(serverId);
     let routerUsers: any[] = [];
     let routerActiveUsers: any[] = [];
+    let usersFetchOk = false;
     try {
       routerUsers = await this.mikrotikService.getHotspotUsers(serverId);
       routerActiveUsers = await this.mikrotikService.getActiveUsers(serverId);
+      usersFetchOk = true;
     } catch (e: any) {
       console.warn('Gagal mengambil hotspot users/active users dari router:', e.message || e);
     }
@@ -222,122 +226,111 @@ export class ProfilesService {
     let deletedVouchersCount = 0;
     let importedVouchersCount = 0;
 
-    // 2. PENYELARASAN PROFIL HOTSPOT
-    const routerProfileNames = new Set(routerProfiles.map((rp: any) => rp.name));
-    
-    // Ambil profil yang ada di DB lokal untuk server ini
-    const dbProfiles = await this.prisma.hotspotProfile.findMany({
-      where: { serverId },
-    });
+    // Semua mutasi DB dibungkus dalam satu transaksi → atomik (gagal = rollback penuh,
+    // tidak ada state separuh seperti bug sebelumnya).
+    await this.prisma.$transaction(
+      async (tx) => {
+        // 2. PENYELARASAN PROFIL HOTSPOT
+        const routerProfileNames = new Set(routerProfiles.map((rp: any) => rp.name));
 
-    for (const dbProfile of dbProfiles) {
-      // Jika profil di DB tidak ada lagi di MikroTik, hapus beserta vouchernya!
-      if (!routerProfileNames.has(dbProfile.name)) {
-        // Hapus voucher di bawah profil ini terlebih dahulu (untuk menghindari RESTRICT constraint)
-        const delVouchers = await this.prisma.voucher.deleteMany({
-          where: { profileId: dbProfile.id },
-        });
-        deletedVouchersCount += delVouchers.count;
+        const dbProfiles = await tx.hotspotProfile.findMany({ where: { serverId } });
 
-        // Hapus profil itu sendiri
-        await this.prisma.hotspotProfile.delete({
-          where: { id: dbProfile.id },
-        });
-        deletedProfilesCount++;
-      }
-    }
-
-    // Upsert profil yang ada di MikroTik ke DB lokal
-    for (const rProfile of routerProfiles) {
-      const name = rProfile.name;
-      const rateLimit = rProfile['rate-limit'] || '2M/2M';
-      const sessionTimeout = rProfile['session-timeout'] || null;
-      const idleTimeout = rProfile['idle-timeout'] || null;
-      const sharedUsers = parseInt(rProfile['shared-users'] || '1', 10);
-
-      const existing = await this.prisma.hotspotProfile.findUnique({
-        where: {
-          serverId_name: { serverId, name },
-        },
-      });
-
-      if (!existing) {
-        const newProfile = await this.prisma.hotspotProfile.create({
-          data: {
-            serverId,
-            name,
-            rateLimit,
-            sessionTimeout,
-            idleTimeout,
-            sharedUsers,
-            validity: '1d', // default validity
-            syncedToRouter: true,
-            description: 'Diimpor otomatis dari router MikroTik',
-          },
-        });
-        imported.push(newProfile);
-      } else {
-        // Perbarui profil lokal agar sinkron dengan konfigurasi MikroTik saat ini
-        await this.prisma.hotspotProfile.update({
-          where: { id: existing.id },
-          data: {
-            rateLimit,
-            sessionTimeout,
-            idleTimeout,
-            sharedUsers,
-            syncedToRouter: true,
-          },
-        });
-      }
-    }
-
-    // 3. PENYELARASAN VOUCHER HOTSPOT (PASCA-RESET)
-    // Jika koneksi router sukses (routerProfiles berhasil ditarik), hapus voucher lokal yang tidak terdaftar lagi di MikroTik
-    if (routerProfiles.length > 0) {
-      const routerUsernames = new Set(routerUsers.map((ru: any) => ru.name));
-      const activeUsernames = new Set(routerActiveUsers.map((au: any) => au.user));
-      
-      const dbVouchers = await this.prisma.voucher.findMany({
-        where: { serverId },
-      });
-      const dbUsernames = new Set(dbVouchers.map((v) => v.username));
-
-      for (const dbVoucher of dbVouchers) {
-        // Jika voucher di DB lokal tidak terdaftar sebagai user hotspot di MikroTik, hapus!
-        if (!routerUsernames.has(dbVoucher.username)) {
-          await this.prisma.voucher.delete({
-            where: { id: dbVoucher.id },
-          });
-          deletedVouchersCount++;
+        for (const dbProfile of dbProfiles) {
+          // Profil di DB yang tidak ada lagi di MikroTik → hapus beserta vouchernya
+          if (!routerProfileNames.has(dbProfile.name)) {
+            const delVouchers = await tx.voucher.deleteMany({
+              where: { profileId: dbProfile.id },
+            });
+            deletedVouchersCount += delVouchers.count;
+            await tx.hotspotProfile.delete({ where: { id: dbProfile.id } });
+            deletedProfilesCount++;
+          }
         }
-      }
 
-      // Import user dari MikroTik yang belum ada di database lokal
-      // Kita butuh pemetaan nama profil ke ID profil lokal
-      const localProfiles = await this.prisma.hotspotProfile.findMany({
-        where: { serverId },
-      });
-      const profileMap = new Map<string, string>();
-      for (const p of localProfiles) {
-        profileMap.set(p.name, p.id);
-      }
+        // Upsert profil dari MikroTik ke DB lokal
+        for (const rProfile of routerProfiles) {
+          const name = rProfile.name;
+          const rateLimit = rProfile['rate-limit'] || '2M/2M';
+          const sessionTimeout = rProfile['session-timeout'] || null;
+          const idleTimeout = rProfile['idle-timeout'] || null;
+          const sharedUsers = parseInt(rProfile['shared-users'] || '1', 10);
 
-      for (const rUser of routerUsers) {
-        // Cek apakah voucher sudah pernah dipakai atau sedang dipakai
-        const isUsed = (rUser.uptime && rUser.uptime !== '0s') || 
-                       (rUser['bytes-in'] && parseInt(rUser['bytes-in']) > 0) || 
-                       (rUser['bytes-out'] && parseInt(rUser['bytes-out']) > 0) ||
-                       activeUsernames.has(rUser.name);
-                       
-        const targetStatus = isUsed ? 'USED' : 'UNUSED';
+          const existing = await tx.hotspotProfile.findUnique({
+            where: { serverId_name: { serverId, name } },
+          });
 
-        if (!dbUsernames.has(rUser.name)) {
-          const profileName = rUser.profile || 'default';
-          const localProfileId = profileMap.get(profileName);
-          
-          if (localProfileId) {
-            await this.prisma.voucher.create({
+          if (!existing) {
+            const newProfile = await tx.hotspotProfile.create({
               data: {
+                serverId,
+                name,
+                rateLimit,
+                sessionTimeout,
+                idleTimeout,
+                sharedUsers,
+                validity: '1d',
+                syncedToRouter: true,
+                description: 'Diimpor otomatis dari router MikroTik',
+              },
+            });
+            imported.push(newProfile);
+          } else {
+            await tx.hotspotProfile.update({
+              where: { id: existing.id },
+              data: { rateLimit, sessionTimeout, idleTimeout, sharedUsers, syncedToRouter: true },
+            });
+          }
+        }
+
+        // 3. PENYELARASAN VOUCHER — HANYA jika daftar user berhasil ditarik.
+        //    Tanpa guard ini, fetch user yang gagal (routerUsers=[]) akan menghapus
+        //    SEMUA voucher lokal (bug "web kosong" di v6).
+        if (routerProfiles.length > 0 && usersFetchOk) {
+          const routerUsernames = new Set(routerUsers.map((ru: any) => ru.name));
+          const activeUsernames = new Set(routerActiveUsers.map((au: any) => au.user));
+
+          const dbVouchers = await tx.voucher.findMany({ where: { serverId } });
+
+          // Hapus voucher lokal yang sudah tidak ada di router
+          const vouchersToDelete = dbVouchers.filter(
+            (v) => !routerUsernames.has(v.username),
+          );
+          if (vouchersToDelete.length > 0) {
+            await tx.voucher.deleteMany({
+              where: { id: { in: vouchersToDelete.map((v) => v.id) } },
+            });
+            deletedVouchersCount += vouchersToDelete.length;
+          }
+
+          // Map nama profil → ID profil lokal
+          const localProfiles = await tx.hotspotProfile.findMany({ where: { serverId } });
+          const profileMap = new Map<string, string>();
+          for (const p of localProfiles) profileMap.set(p.name, p.id);
+
+          // Upsert tiap user router (keyed pada username yang unique global).
+          // upsert menghilangkan P2002: create jika baru, update jika sudah ada
+          // (termasuk jika username dimiliki server lain → dipindahkan ke server ini).
+          for (const rUser of routerUsers) {
+            const isUsed =
+              (rUser.uptime && rUser.uptime !== '0s') ||
+              (rUser['bytes-in'] && parseInt(rUser['bytes-in']) > 0) ||
+              (rUser['bytes-out'] && parseInt(rUser['bytes-out']) > 0) ||
+              activeUsernames.has(rUser.name);
+
+            const targetStatus = isUsed ? 'USED' : 'UNUSED';
+            const profileName = rUser.profile || 'default';
+            const localProfileId = profileMap.get(profileName);
+
+            if (!localProfileId) {
+              console.warn(
+                `User ${rUser.name} menggunakan profil "${profileName}" yang tidak ada di lokal. Diabaikan.`,
+              );
+              continue;
+            }
+
+            await tx.voucher.upsert({
+              where: { username: rUser.name },
+              create: {
                 serverId,
                 profileId: localProfileId,
                 username: rUser.name,
@@ -345,23 +338,18 @@ export class ProfilesService {
                 status: targetStatus,
                 batchId: 'sync-imported',
               },
+              update: {
+                serverId,
+                profileId: localProfileId,
+                status: targetStatus,
+              },
             });
             importedVouchersCount++;
-          } else {
-            console.warn(`User ${rUser.name} menggunakan profil "${profileName}" yang tidak ada di lokal. Diabaikan.`);
-          }
-        } else {
-          // Jika voucher sudah ada di DB, pastikan statusnya up-to-date
-          const existingVoucher = dbVouchers.find((v) => v.username === rUser.name);
-          if (existingVoucher && existingVoucher.status !== targetStatus) {
-            await this.prisma.voucher.update({
-              where: { id: existingVoucher.id },
-              data: { status: targetStatus },
-            });
           }
         }
-      }
-    }
+      },
+      { timeout: 30000 },
+    );
 
     return {
       serverId,
@@ -370,6 +358,7 @@ export class ProfilesService {
       deletedProfilesCount,
       deletedVouchersCount,
       importedVouchersCount,
+      usersSynced: usersFetchOk,
       imported,
     };
   }

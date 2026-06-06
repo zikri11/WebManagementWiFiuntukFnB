@@ -11,6 +11,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service.js';
 import { CreateServerDto } from './dto/create-server.dto.js';
 import { UpdateServerDto } from './dto/update-server.dto.js';
 import { TestConnectionDto } from './dto/test-connection.dto.js';
+import { encryptSecret, decryptSecret } from '../../common/crypto.util.js';
 
 @Injectable()
 export class ServersService {
@@ -19,6 +20,12 @@ export class ServersService {
     private readonly mikrotikService: MikrotikService,
     private readonly activityLogService: ActivityLogService,
   ) {}
+
+  /** Buang field password dari objek server sebelum dikirim ke klien. */
+  private stripPassword<T extends { password?: string }>(server: T): Omit<T, 'password'> {
+    const { password: _pw, ...safe } = server;
+    return safe;
+  }
 
   async create(createServerDto: CreateServerDto) {
     const { name, host, port, username, password, useSSL } = createServerDto;
@@ -41,7 +48,7 @@ export class ServersService {
         host,
         port: defaultPort,
         username,
-        password,
+        password: encryptSecret(password), // enkripsi at-rest (AES-256-GCM)
         useSSL: useSSL ?? false,
       },
     });
@@ -54,13 +61,14 @@ export class ServersService {
       detail: `Router baru ditambahkan: ${name} (${host})`,
     });
 
-    return server;
+    return this.stripPassword(server);
   }
 
   async findAll() {
-    return this.prisma.mikrotikServer.findMany({
+    const servers = await this.prisma.mikrotikServer.findMany({
       orderBy: { createdAt: 'desc' },
     });
+    return servers.map((s) => this.stripPassword(s));
   }
 
   async findOne(id: string) {
@@ -70,7 +78,7 @@ export class ServersService {
     if (!server) {
       throw new NotFoundException(`Router dengan ID ${id} tidak ditemukan`);
     }
-    return server;
+    return this.stripPassword(server);
   }
 
   async update(id: string, updateServerDto: UpdateServerDto) {
@@ -90,9 +98,17 @@ export class ServersService {
       }
     }
 
+    // Enkripsi password hanya jika benar-benar diisi (string kosong = tidak diubah).
+    const data: Record<string, unknown> = { ...updateServerDto };
+    if (data.password) {
+      data.password = encryptSecret(data.password as string);
+    } else {
+      delete data.password;
+    }
+
     const updated = await this.prisma.mikrotikServer.update({
       where: { id },
-      data: updateServerDto,
+      data,
     });
 
     await this.activityLogService.logAction({
@@ -103,7 +119,7 @@ export class ServersService {
       detail: `Konfigurasi router diupdate: ${updated.name}`,
     });
 
-    return updated;
+    return this.stripPassword(updated);
   }
 
   async remove(id: string) {
@@ -114,13 +130,17 @@ export class ServersService {
   }
 
   async testConnection(id: string) {
-    const server = await this.findOne(id);
+    // Baca row mentah (password masih terenkripsi) lalu dekripsi untuk dipakai.
+    const server = await this.prisma.mikrotikServer.findUnique({ where: { id } });
+    if (!server) {
+      throw new NotFoundException(`Router dengan ID ${id} tidak ditemukan`);
+    }
 
     const result = await this.mikrotikService.testConnection(
       server.host,
       server.port,
       server.username,
-      server.password,
+      decryptSecret(server.password),
       server.useSSL,
     );
 

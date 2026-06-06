@@ -22,7 +22,14 @@ interface ServerState {
   getActiveServer: () => MikrotikServer | undefined;
   fetchServers: () => Promise<void>;
   checkActiveServerStatus: () => Promise<void>;
-  syncActiveServer: (id: string) => Promise<void>;
+  syncActiveServer: (id: string) => Promise<SyncResult | null>;
+}
+
+export interface SyncResult {
+  usersSynced?: boolean;
+  importedVouchersCount?: number;
+  deletedVouchersCount?: number;
+  [key: string]: unknown;
 }
 
 export const useServerStore = create<ServerState>((set, get) => {
@@ -97,32 +104,34 @@ export const useServerStore = create<ServerState>((set, get) => {
         set({ servers: updatedServers });
       }
     },
-    syncActiveServer: async (id: string) => {
-      if (!id) return;
+    syncActiveServer: async (id: string): Promise<SyncResult | null> => {
+      if (!id) return null;
       set({ isSyncing: true, syncError: null });
       try {
-        await apiClient.post(`/profiles/sync/${id}`);
-        
+        const response = await apiClient.post(`/profiles/sync/${id}`);
+
         // Set ONLINE status on successful synchronization
         const currentServers = get().servers;
-        const updatedServers = currentServers.map(server => 
-          server.id === id 
-            ? { ...server, lastStatus: 'ONLINE' } 
+        const updatedServers = currentServers.map(server =>
+          server.id === id
+            ? { ...server, lastStatus: 'ONLINE' }
             : server
         );
         set({ servers: updatedServers, isSyncing: false, syncError: null });
+        return (response.data ?? null) as SyncResult | null;
       } catch (error: any) {
         console.error('Failed to sync active server:', error);
         const errMsg = error.response?.data?.message || error.message || 'Gagal sinkronisasi data dari router MikroTik.';
-        
+
         // Set OFFLINE status on sync error
         const currentServers = get().servers;
-        const updatedServers = currentServers.map(server => 
-          server.id === id 
-            ? { ...server, lastStatus: 'OFFLINE' } 
+        const updatedServers = currentServers.map(server =>
+          server.id === id
+            ? { ...server, lastStatus: 'OFFLINE' }
             : server
         );
         set({ servers: updatedServers, isSyncing: false, syncError: errMsg });
+        return null;
       }
     },
   };

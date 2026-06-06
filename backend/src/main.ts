@@ -1,10 +1,14 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // ─── Security Headers (helmet) ────────────────────────────────────────────
+  app.use(helmet());
 
   // ─── Global Prefix ────────────────────────────────────────────────────────
   app.setGlobalPrefix('api');

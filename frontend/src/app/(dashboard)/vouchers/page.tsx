@@ -1,6 +1,7 @@
 "use client";
 
 import { useServerStore } from "@/store/server-store";
+import { useToastStore } from "@/store/toast-store";
 import apiClient from "@/lib/api-client";
 import { useEffect, useState, useMemo } from "react";
 import {
@@ -45,7 +46,6 @@ interface Voucher {
   password: string;
   status: "UNUSED" | "USED" | "REVOKED" | "EXPIRED";
   batchId: string | null;
-  posTransId: string | null;
   outletName: string | null;
   usedAt: string | null;
   expiredAt: string | null;
@@ -172,28 +172,54 @@ export default function VouchersPage() {
 
   const handleSync = async () => {
     if (!activeServerId) return;
-    await syncActiveServer(activeServerId);
+    const toast = useToastStore.getState();
+    const result = await syncActiveServer(activeServerId);
     await loadVouchers();
     await loadProfiles();
+
+    if (result === null) {
+      toast.error(
+        "Gagal terhubung ke router MikroTik. Periksa koneksi lalu coba lagi.",
+        "Sinkronisasi gagal",
+      );
+    } else if (result.usersSynced === false) {
+      // Profil tersinkron tetapi daftar user gagal ditarik — voucher TIDAK diubah.
+      // (Cegah bug "web kosong": data voucher lokal sengaja dipertahankan.)
+      toast.warning(
+        "Profil tersinkron, tetapi daftar voucher gagal ditarik. Data voucher lokal dipertahankan (tidak dihapus). Silakan coba lagi.",
+        "Sinkronisasi sebagian",
+      );
+    } else {
+      toast.success("Data profil & voucher berhasil diselaraskan dengan router.", "Sinkronisasi berhasil");
+    }
   };
 
   const executeDelete = async () => {
+    const toast = useToastStore.getState();
     setIsDeleting(true);
-    setErrorMessage("");
-    setSuccessMessage("");
     try {
       const response = await apiClient.post("/vouchers/delete-bulk", { ids: deleteTarget });
-      if (response.data?.success) {
-        // We use alert or notification. Since we don't have global toast here easily without adding one, 
-        // we can just rely on the loadVouchers() to update state and close modal.
-        setSelectedIds([]);
-        await loadVouchers();
-        setIsDeleteModalOpen(false);
+      const data = response.data;
+
+      // Selalu refresh daftar — sebagian voucher mungkin sudah terhapus
+      setSelectedIds([]);
+      await loadVouchers();
+      setIsDeleteModalOpen(false);
+
+      if (data?.failedCount && data.failedCount > 0) {
+        // Partial-safe: sebagian gagal dihapus di router → voucher tsb TETAP ada di DB
+        toast.warning(
+          `${data.deletedCount} voucher terhapus, ${data.failedCount} gagal dihapus di router dan tetap tersimpan. Silakan coba lagi.`,
+          "Sebagian gagal dihapus",
+        );
       } else {
-        alert(response.data?.message || "Gagal menghapus voucher");
+        toast.success(`${data?.deletedCount ?? deleteTarget.length} voucher berhasil dihapus.`, "Berhasil dihapus");
       }
     } catch (error: any) {
-      alert(error.response?.data?.message || error.message || "Gagal menghapus voucher");
+      toast.error(
+        error.response?.data?.message || error.message || "Terjadi kesalahan saat menghapus voucher.",
+        "Gagal menghapus",
+      );
     } finally {
       setIsDeleting(false);
     }
@@ -489,17 +515,20 @@ export default function VouchersPage() {
     setIsDeleteModalOpen(true);
   };
 
-  // Get PDF download URL from NestJS backend API
+  // Base URL backend (dari env, fallback localhost) — dipakai untuk PDF yang
+  // dibuka langsung di browser (di luar axios apiClient).
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4100/api";
+
   const getPdfBatchUrl = (batchId: string) => {
-    return `http://localhost:4000/api/vouchers/pdf/batch/${batchId}`;
+    return `${API_BASE}/vouchers/pdf/batch/${batchId}`;
   };
 
   const getPdfSingleUrl = (voucherId: string) => {
-    return `http://localhost:4000/api/vouchers/pdf/single/${voucherId}`;
+    return `${API_BASE}/vouchers/pdf/single/${voucherId}`;
   };
 
   const getPdfFilteredUrl = () => {
-    return `http://localhost:4000/api/vouchers/pdf/filtered?serverId=${activeServerId}&profileId=${profileFilter}&status=${statusFilter}`;
+    return `${API_BASE}/vouchers/pdf/filtered?serverId=${activeServerId}&profileId=${profileFilter}&status=${statusFilter}`;
   };
 
   return (
@@ -1437,22 +1466,34 @@ export default function VouchersPage() {
               Konfirmasi Penghapusan
             </h3>
             <p className="text-center text-sm text-on-surface-variant mb-6">
-              Anda yakin ingin menghapus <strong>{deleteTarget.length}</strong> voucher? 
+              Anda yakin ingin menghapus <strong>{deleteTarget.length}</strong> voucher?
               <br/><br/>
               Tindakan ini juga akan <strong>menghapus user dari router MikroTik</strong> dan tidak dapat dibatalkan.
             </p>
+
+            {/* Hint saat proses berjalan — penghapusan banyak voucher butuh beberapa detik */}
+            {isDeleting && (
+              <div className="flex items-start gap-2.5 p-3 mb-4 bg-primary-container/40 text-on-surface-variant border border-primary/15 rounded-xl text-xs animate-fade-in">
+                <Loader2 className="w-4 h-4 shrink-0 mt-0.5 text-primary animate-spin" />
+                <span>
+                  Menghapus <strong>{deleteTarget.length}</strong> voucher dari router & database.
+                  Mohon tunggu, <strong>jangan tutup halaman ini</strong>.
+                </span>
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button
                 onClick={() => setIsDeleteModalOpen(false)}
                 disabled={isDeleting}
-                className="flex-1 py-2.5 border border-outline-variant text-on-surface-variant hover:bg-surface-variant rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-2.5 border border-outline-variant text-on-surface-variant hover:bg-surface-variant rounded-xl font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Batal
               </button>
               <button
                 onClick={executeDelete}
                 disabled={isDeleting}
-                className="flex-1 py-2.5 bg-error text-white hover:bg-error/90 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                className="flex-1 py-2.5 bg-error text-white hover:bg-error/90 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isDeleting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

@@ -1,6 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 import {
   Injectable,
@@ -8,97 +6,83 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { decryptSecret } from '../../common/crypto.util.js';
+
+// ─── RouterOS Binary API (v6 + v7) ───────────────────────────────────────────
+const { RouterOSAPI } = require('routeros-client') as typeof import('routeros-client');
+
+// Patch node-routeros: RouterOS v7 kirim reply '!empty' (list kosong) sebelum
+// '!done'. Library tidak kenal reply ini — default branch memanggil this.close()
+// lalu !done datang ke tag yang sudah di-unregister → UNREGISTEREDTAG crash.
+// Fix: skip packet '!empty', biarkan '!done' resolve promise dengan [] seperti biasa.
+const { Channel } = require('node-routeros/dist/Channel') as { Channel: any };
+const _origProcessPacket = Channel.prototype.processPacket as (p: string[]) => void;
+Channel.prototype.processPacket = function (packet: string[]) {
+  if (packet[0] === '!empty') return; // v7: diikuti !done, abaikan saja
+  _origProcessPacket.call(this, packet);
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class MikrotikService {
   constructor(private readonly prisma: PrismaService) { }
 
   /**
-   * Helper untuk membuat HTTP request ke RouterOS REST API.
+   * Helper RouterOS Binary API — pengganti request() berbasis HTTP/REST.
+   * Mendukung RouterOS v6 (port 8728) dan v7 (port 8728/8729).
+   * Pola: connect → write → close (stateless, satu operasi per koneksi).
    */
-  private async request(
+  private async apiRequest(
     host: string,
     port: number,
     username: string,
     password: string,
     useSsl: boolean,
-    path: string,
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE' | 'PUT' = 'GET',
-    body?: any,
-    timeoutMs: number = 5000,
-  ): Promise<any> {
-    const protocol = useSsl ? 'https' : 'http';
-    const baseUrl = `${protocol}://${host}:${port}/rest`;
-    const url = `${baseUrl}/${path.replace(/^\//, '')}`;
-
-    const base64Auth = Buffer.from(`${username}:${password}`).toString(
-      'base64',
-    );
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeoutMs);
+    command: string,
+    params: string[] = [],
+    timeoutSec: number = 5,
+  ): Promise<any[]> {
+    const api = new RouterOSAPI({
+      host,
+      user: username,
+      password,
+      port: port || (useSsl ? 8729 : 8728),
+      ...(useSsl ? { tls: { rejectUnauthorized: false } } : {}),
+      timeout: timeoutSec,
+    });
 
     try {
-      const options: RequestInit = {
-        method,
-        headers: {
-          Authorization: `Basic ${base64Auth}`,
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
-      };
-
-      if (body && method !== 'GET') {
-        options.body = JSON.stringify(body);
+      await api.connect();
+      const result = await api.write(command, params);
+      return Array.isArray(result) ? result : [];
+    } catch (error: any) {
+      const msg: string = error?.message ?? String(error);
+      if (
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('timeout') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('EHOSTUNREACH')
+      ) {
+        throw new BadRequestException(
+          `Koneksi ke MikroTik timeout setelah ${timeoutSec * 1000}ms`,
+        );
       }
-
-      const response = await fetch(url, options);
-      clearTimeout(id);
-
-      if (response.status === 401 || response.status === 403) {
+      if (
+        msg.includes('cannot log in') ||
+        msg.includes('invalid user') ||
+        msg.includes('EAUTH') ||
+        msg.toLowerCase().includes('wrong credentials')
+      ) {
         throw new BadRequestException(
           'Kredensial MikroTik salah atau akses ditolak',
         );
       }
-
-      if (method === 'DELETE' && response.status === 204) {
-        return { success: true };
-      }
-
-      if (!response.ok) {
-        const text = await response.text();
-        let errorMsg = `HTTP Error ${response.status}`;
-        try {
-          const json = JSON.parse(text);
-          if (json.detail || json.message) {
-            errorMsg = json.detail || json.message;
-          }
-        } catch {
-          if (text) errorMsg = text;
-        }
-        throw new BadRequestException(
-          `Gagal menghubungi MikroTik: ${errorMsg}`,
-        );
-      }
-
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        return await response.json();
-      }
-
-      return { success: true };
-    } catch (error: any) {
-      clearTimeout(id);
-      if (error.name === 'AbortError') {
-        throw new BadRequestException(
-          `Koneksi ke MikroTik timeout setelah ${timeoutMs}ms`,
-        );
-      }
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
+      if (error instanceof BadRequestException) throw error;
       throw new BadRequestException(
-        `Koneksi ke MikroTik gagal: ${error.message || error}`,
+        `Koneksi ke MikroTik gagal: ${msg}`,
       );
+    } finally {
+      await api.close().catch(() => {});
     }
   }
 
@@ -114,7 +98,8 @@ export class MikrotikService {
         'Server MikroTik tidak ditemukan di database',
       );
     }
-    return server;
+    // Dekripsi password at-rest → plaintext untuk dipakai semua method MikroTik
+    return { ...server, password: decryptSecret(server.password) };
   }
 
   /**
@@ -127,18 +112,11 @@ export class MikrotikService {
     password: string,
     useSsl: boolean = false,
   ) {
-    const portToUse = port || (useSsl ? 443 : 80);
-    return this.request(
-      host,
-      portToUse,
-      username,
-      password,
-      useSsl,
-      'system/resource',
-      'GET',
-      null,
-      5000,
+    const result = await this.apiRequest(
+      host, port, username, password, useSsl,
+      '/system/resource/print',
     );
+    return result[0] ?? {};
   }
 
   /**
@@ -170,83 +148,9 @@ export class MikrotikService {
    */
   async getHotspotProfiles(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
-    const response = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'ip/hotspot/user/profile',
-      'GET',
-    );
-    return Array.isArray(response) ? response : [];
-  }
-
-  /**
-   * Buat hotspot user baru di router (untuk voucher).
-   */
-  async createHotspotUser(
-    serverId: string,
-    username: string,
-    password: string,
-    profile: string,
-  ) {
-    const creds = await this.getServerCredentials(serverId);
-    return this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'ip/hotspot/user',
-      'PUT',
-      {
-        name: username,
-        password: password,
-        profile: profile,
-      },
-    );
-  }
-
-  /**
-   * Hapus hotspot user dari router (revoke voucher).
-   */
-  async removeHotspotUser(serverId: string, username: string) {
-    const creds = await this.getServerCredentials(serverId);
-
-    // Langkah 1: Cari ID internal MikroTik untuk user tersebut
-    const users = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      `ip/hotspot/user?name=${encodeURIComponent(username)}`,
-      'GET',
-    );
-
-    if (!Array.isArray(users) || users.length === 0) {
-      throw new NotFoundException(
-        `User hotspot "${username}" tidak ditemukan di router`,
-      );
-    }
-
-    const internalId = users[0]['.id'];
-    if (!internalId) {
-      throw new BadRequestException(
-        `Gagal mendapatkan ID internal untuk user "${username}"`,
-      );
-    }
-
-    // Langkah 2: Hapus menggunakan ID internal
-    return this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      `ip/hotspot/user/${internalId}`,
-      'DELETE',
+    return this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/profile/print',
     );
   }
 
@@ -255,16 +159,10 @@ export class MikrotikService {
    */
   async getActiveUsers(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
-    const response = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'ip/hotspot/active',
-      'GET',
+    return this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/active/print',
     );
-    return Array.isArray(response) ? response : [];
   }
 
   /**
@@ -272,16 +170,10 @@ export class MikrotikService {
    */
   async getHotspotUsers(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
-    const response = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'ip/hotspot/user',
-      'GET',
+    return this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/print',
     );
-    return Array.isArray(response) ? response : [];
   }
 
   /**
@@ -289,15 +181,11 @@ export class MikrotikService {
    */
   async getSystemResource(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
-    return this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'system/resource',
-      'GET',
+    const result = await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/system/resource/print',
     );
+    return result[0] ?? {};
   }
 
   /**
@@ -305,16 +193,10 @@ export class MikrotikService {
    */
   async getInterfaces(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
-    const response = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'interface',
-      'GET',
+    return this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/interface/print',
     );
-    return Array.isArray(response) ? response : [];
   }
 
   /**
@@ -324,33 +206,26 @@ export class MikrotikService {
   async getFullConfig(serverId: string) {
     const creds = await this.getServerCredentials(serverId);
 
-    const endpoints = {
-      resources: 'system/resource',
-      profiles: 'ip/hotspot/user/profile',
-      pools: 'ip/pool',
-      dhcpServers: 'ip/dhcp-server',
-      dns: 'ip/dns',
-      hotspots: 'ip/hotspot',
-      users: 'ip/hotspot/user',
+    const commands: Record<string, string> = {
+      resources:   '/system/resource/print',
+      profiles:    '/ip/hotspot/user/profile/print',
+      pools:       '/ip/pool/print',
+      dhcpServers: '/ip/dhcp-server/print',
+      dns:         '/ip/dns/print',
+      hotspots:    '/ip/hotspot/print',
+      users:       '/ip/hotspot/user/print',
     };
 
     const results: Record<string, any> = {};
 
-    // Ambil secara paralel menggunakan Promise.allSettled agar jika salah satu gagal, yang lain tetap jalan
-    const promises = Object.entries(endpoints).map(async ([key, path]) => {
+    const promises = Object.entries(commands).map(async ([key, cmd]) => {
       try {
-        const data = await this.request(
-          creds.host,
-          creds.port,
-          creds.username,
-          creds.password,
-          creds.useSSL,
-          path,
-          'GET',
-          null,
-          4000, // Timeout 4 detik per request
+        const data = await this.apiRequest(
+          creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+          cmd, [], 4,
         );
-        results[key] = data;
+        // resources adalah objek tunggal, sisanya array
+        results[key] = key === 'resources' ? (data[0] ?? {}) : data;
       } catch (error: any) {
         results[key] = { error: error.message || 'Gagal mengambil data' };
       }
@@ -372,23 +247,17 @@ export class MikrotikService {
     sharedUsers: number = 1,
   ) {
     const creds = await this.getServerCredentials(serverId);
-    const body: any = {
-      name,
-      'rate-limit': rateLimit,
-      'shared-users': sharedUsers.toString(),
-    };
-    if (sessionTimeout) body['session-timeout'] = sessionTimeout;
-    if (idleTimeout) body['idle-timeout'] = idleTimeout;
+    const params = [
+      `=name=${name}`,
+      `=rate-limit=${rateLimit}`,
+      `=shared-users=${sharedUsers}`,
+    ];
+    if (sessionTimeout) params.push(`=session-timeout=${sessionTimeout}`);
+    if (idleTimeout)    params.push(`=idle-timeout=${idleTimeout}`);
 
-    return this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      'ip/hotspot/user/profile',
-      'PUT',
-      body,
+    return this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/profile/add', params,
     );
   }
 
@@ -398,32 +267,139 @@ export class MikrotikService {
   async removeHotspotProfile(serverId: string, name: string) {
     const creds = await this.getServerCredentials(serverId);
 
-    // Cari ID internal MikroTik
-    const profiles = await this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      `ip/hotspot/user/profile?name=${encodeURIComponent(name)}`,
-      'GET',
+    const found = await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/profile/print', [`?name=${name}`],
     );
 
-    if (!Array.isArray(profiles) || profiles.length === 0) {
-      return { success: true };
-    }
+    if (!found.length) return { success: true };
 
-    const internalId = profiles[0]['.id'];
+    const internalId: string = found[0]['.id'];
     if (!internalId) return { success: true };
 
-    return this.request(
-      creds.host,
-      creds.port,
-      creds.username,
-      creds.password,
-      creds.useSSL,
-      `ip/hotspot/user/profile/${internalId}`,
-      'DELETE',
+    await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/profile/remove', [`=.id=${internalId}`],
     );
+    return { success: true };
+  }
+
+  /**
+   * Buat hotspot user baru di router (untuk voucher).
+   */
+  async createHotspotUser(
+    serverId: string,
+    username: string,
+    password: string,
+    profile: string,
+  ) {
+    const creds = await this.getServerCredentials(serverId);
+    await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/add',
+      [`=name=${username}`, `=password=${password}`, `=profile=${profile}`],
+    );
+  }
+
+  /**
+   * Hapus hotspot user dari router (revoke voucher).
+   */
+  async removeHotspotUser(serverId: string, username: string) {
+    const creds = await this.getServerCredentials(serverId);
+
+    const found = await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/print', [`?name=${username}`],
+    );
+
+    if (!found.length) {
+      throw new NotFoundException(
+        `User hotspot "${username}" tidak ditemukan di router`,
+      );
+    }
+
+    const internalId: string = found[0]['.id'];
+    if (!internalId) {
+      throw new BadRequestException(
+        `Gagal mendapatkan ID internal untuk user "${username}"`,
+      );
+    }
+
+    await this.apiRequest(
+      creds.host, creds.port, creds.username, creds.password, creds.useSSL,
+      '/ip/hotspot/user/remove', [`=.id=${internalId}`],
+    );
+    return { success: true };
+  }
+
+  /**
+   * Hapus banyak hotspot user dalam SATU koneksi (untuk bulk delete).
+   *
+   * Menghindari connection storm: alih-alih 2 koneksi per user (print + remove)
+   * yang dijalankan paralel, method ini buka 1 koneksi, print seluruh user SEKALI
+   * untuk membangun map name→.id, lalu remove tiap user sekuensial di koneksi sama.
+   *
+   * Return korelasi hasil agar caller bisa hapus DB hanya untuk yang benar-benar
+   * terhapus / sudah tidak ada di router (partial-safe):
+   * - removed:  berhasil dihapus dari router
+   * - notFound: sudah tidak ada di router (aman dihapus dari DB)
+   * - failed:   gagal dihapus (TETAP di DB, bisa di-retry)
+   */
+  async removeHotspotUsersByNames(
+    serverId: string,
+    names: string[],
+  ): Promise<{ removed: string[]; notFound: string[]; failed: string[] }> {
+    const removed: string[] = [];
+    const notFound: string[] = [];
+    const failed: string[] = [];
+
+    if (names.length === 0) return { removed, notFound, failed };
+
+    const creds = await this.getServerCredentials(serverId);
+
+    const api = new RouterOSAPI({
+      host: creds.host,
+      user: creds.username,
+      password: creds.password,
+      port: creds.port || (creds.useSSL ? 8729 : 8728),
+      ...(creds.useSSL ? { tls: { rejectUnauthorized: false } } : {}),
+      timeout: 15,
+    });
+
+    try {
+      await api.connect();
+
+      // Print seluruh user sekali → map name → .id
+      const allUsers: any[] = await api.write('/ip/hotspot/user/print');
+      const idByName = new Map<string, string>();
+      for (const u of allUsers) {
+        if (u?.name && u['.id']) idByName.set(u.name, u['.id']);
+      }
+
+      // Remove sekuensial di koneksi yang sama
+      for (const name of names) {
+        const internalId = idByName.get(name);
+        if (!internalId) {
+          notFound.push(name); // sudah tidak ada di router
+          continue;
+        }
+        try {
+          await api.write('/ip/hotspot/user/remove', [`=.id=${internalId}`]);
+          removed.push(name);
+        } catch {
+          failed.push(name); // gagal hapus item ini, lanjut item berikutnya
+        }
+      }
+    } catch {
+      // Koneksi/print gagal total → semua nama yang belum diproses = failed (tetap di DB)
+      const processed = new Set([...removed, ...notFound, ...failed]);
+      for (const name of names) {
+        if (!processed.has(name)) failed.push(name);
+      }
+    } finally {
+      await api.close().catch(() => {});
+    }
+
+    return { removed, notFound, failed };
   }
 }

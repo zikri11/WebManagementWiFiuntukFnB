@@ -4,11 +4,21 @@
  * Mengekspos endpoint untuk menjalankan AI analysis dan mengambil laporan.
  * Dokumentasi Swagger di-generate otomatis dari dekorator @nestjs/swagger.
  */
-import { Controller, Get, Param, Post, Body } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Param, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AiService } from './ai.service.js';
 
 @ApiTags('AI Analysis')
+@ApiBearerAuth('access-token')
+@UseGuards(JwtAuthGuard)
 @Controller('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
@@ -18,6 +28,8 @@ export class AiController {
    * Jalankan AI analysis untuk server MikroTik tertentu.
    */
   @Post('servers/:id/analyze')
+  // Batasi panggilan LLM yang mahal: maksimal 10 / jam / IP
+  @Throttle({ default: { ttl: 3_600_000, limit: 10 } })
   @ApiOperation({
     summary: 'Analisis konfigurasi hotspot MikroTik menggunakan AI',
   })
